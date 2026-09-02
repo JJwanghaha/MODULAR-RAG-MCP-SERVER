@@ -1,1 +1,0 @@
-Placeholder for the chunk-refinement prompt. It will be designed with the transform pipeline.

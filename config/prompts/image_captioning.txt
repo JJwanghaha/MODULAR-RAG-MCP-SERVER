@@ -1,1 +1,0 @@
-Placeholder for the image-captioning prompt. It will be designed with multimodal ingestion.

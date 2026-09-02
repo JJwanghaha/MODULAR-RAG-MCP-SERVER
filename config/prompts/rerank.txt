@@ -1,1 +1,0 @@
-Placeholder for the LLM reranking prompt. It will be designed with the retrieval pipeline.
