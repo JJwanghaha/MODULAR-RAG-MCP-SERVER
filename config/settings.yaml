@@ -1,0 +1,10 @@
+# A1 only establishes a readable, secret-free configuration skeleton.
+# Typed loading and validation are implemented in A3.
+application:
+  name: modular-rag
+  environment: development
+
+paths:
+  data: data
+  cache: cache
+  logs: logs

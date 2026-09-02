@@ -65,6 +65,7 @@ config/settings.yaml.qa_backup
 config/settings.yaml.bak
 
 # IDE
+.DS_Store
 .idea/
 .vscode/
 *.swp

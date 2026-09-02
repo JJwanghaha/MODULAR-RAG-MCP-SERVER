@@ -1951,7 +1951,7 @@ dashboard:
 
 | 任务编号 | 任务名称 | 状态 | 完成日期 | 备注 |
 |---------|---------|------|---------|------|
-| A1 | 初始化目录树与最小可运行入口 | [ ] | | |
+| A1 | 初始化目录树与最小可运行入口 | [x] | 2026-09-02 | 使用 `modular_rag` 命名空间，见 ADR 0001 |
 | A2 | 引入 pytest 并建立测试目录约定 | [ ] | | |
 | A3 | 配置加载与校验（Settings） | [ ] | | |
 
@@ -2066,7 +2066,7 @@ dashboard:
 
 | 阶段 | 总任务数 | 已完成 | 进度 |
 |------|---------|--------|------|
-| 阶段 A | 3 | 0 | 0% |
+| 阶段 A | 3 | 1 | 33% |
 | 阶段 B | 16 | 0 | 0% |
 | 阶段 C | 15 | 0 | 0% |
 | 阶段 D | 7 | 0 | 0% |
@@ -2075,7 +2075,7 @@ dashboard:
 | 阶段 G | 6 | 0 | 0% |
 | 阶段 H | 5 | 0 | 0% |
 | 阶段 I | 5 | 0 | 0% |
-| **总计** | **68** | **0** | **0%** |
+| **总计** | **68** | **1** | **1.5%** |
 
 
 ---
@@ -2083,27 +2083,27 @@ dashboard:
 ## 阶段 A：工程骨架与测试基座（目标：先可导入，再可测试）
 
 ### A1：初始化目录树与最小可运行入口
-- **目标**：在 repo 根目录创建第 5.2 节所述目录骨架与空模块文件（可 import）。
+- **目标**：建立可安装、可导入、可启动的 Python 3.12 工程骨架，不实现 RAG 业务逻辑。
+- **架构决策**：使用单一 `modular_rag` 命名空间，并按 RAG 领域职责划分包。具体理由见
+  `docs/adr/0001-package-layout.md`。
 - **修改文件**：
-  - `main.py`
-  - `pyproject.toml`
-  - `README.md`
-  - `.gitignore`（Python 项目标准忽略规则：`__pycache__`、`.venv`、`.env`、`*.pyc`、IDE 配置等）
-  - `src/**/__init__.py`（按目录树补齐）
-  - `config/settings.yaml`（最小可解析配置）
-  - `config/prompts/image_captioning.txt`（可先放占位内容，后续阶段补充 Prompt）
-  - `config/prompts/chunk_refinement.txt`（可先放占位内容，后续阶段补充 Prompt）
-  - `config/prompts/rerank.txt`（可先放占位内容，后续阶段补充 Prompt）
-- **实现类/函数**：无（仅骨架）。
-- **实现类/函数**：无（仅骨架，不实现业务逻辑）。
-- **实现类/函数**：为当前项目创建一个虚拟环境模块。
- - **验收标准**：
-  - 目录结构与 DEV_SPEC 5.2 一致（至少把对应目录创建出来）。
-  - `config/prompts/` 目录存在，且三个 prompt 文件可被读取（即使只是占位文本）。
-  - 能导入关键顶层包（与目录结构一一对应）：
-    - `python -c "import mcp_server; import core; import ingestion; import libs; import observability"`
-  - 可以启动虚拟环境模块
-- **测试方法**：运行 `python -m compileall src`（仅做语法/可导入性检查；pytest 基座在 A2 建立）。
+  - `main.py` 与 `src/modular_rag/__main__.py`
+  - `pyproject.toml` 与 `uv.lock`
+  - `src/modular_rag/{domain,ingestion,retrieval,generation,providers,interfaces,observability}`
+  - `config/settings.yaml`
+  - `config/prompts/{image_captioning,chunk_refinement,rerank}.txt`
+  - `docs/adr/0001-package-layout.md`
+- **实现函数**：
+  - `interfaces.cli.build_parser()`：构建无副作用的最小 CLI parser。
+  - `interfaces.cli.main()`：运行 A1 入口并返回退出码。
+- **验收标准**：
+  - `.venv` 使用 Python 3.12，项目可编辑安装。
+  - `modular_rag` 与七个职责包均可导入。
+  - `python -m compileall src` 通过。
+  - `python -m modular_rag`、`modular-rag --version` 和 `python main.py` 可运行。
+  - 三个 Prompt 占位文件存在且非空。
+  - `ruff check .` 通过；上游自带 Skills 脚本不属于本分支源码检查范围。
+- **设计差异**：不预建第 5.2 节全部空目录；Provider 子包与运行数据目录在对应任务中按需创建。
 
 ### A2：引入 pytest 并建立测试目录约定
 - **目标**：建立 `tests/unit|integration|e2e|fixtures` 目录与 pytest 运行基座。
