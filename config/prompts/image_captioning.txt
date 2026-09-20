@@ -1,0 +1,1 @@
+# A1 占位：C7 实现 ImageCaptioner 时定义图片描述 Prompt。

@@ -1,0 +1,4 @@
+# A1 最小配置：A3 将补充 Settings 数据结构和字段校验。
+project:
+  name: "modular-rag-mcp-server"
+  environment: "local"
