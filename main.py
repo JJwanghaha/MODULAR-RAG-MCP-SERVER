@@ -1,9 +1,22 @@
-"""Modular RAG MCP Server 的最小启动入口。"""
+"""Modular RAG MCP Server 的启动入口。"""
+
+import sys
+
+from src.core.settings import SettingsError, load_settings
+from src.observability.logger import get_logger
 
 
 def main() -> int:
-    """运行 A1 工程骨架并返回进程退出码。"""
-    print("Modular RAG MCP Server - A1 skeleton ready")
+    """加载配置；MCP Server 将在 E 阶段接入。"""
+    try:
+        settings = load_settings()
+    except SettingsError as exc:
+        print(f"Configuration error: {exc}", file=sys.stderr)
+        return 1
+
+    logger = get_logger(__name__, settings.observability.log_level)
+    logger.info("Settings loaded successfully.")
+    logger.info("MCP Server will be implemented in Phase E.")
     return 0
 
 

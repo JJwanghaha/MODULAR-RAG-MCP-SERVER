@@ -22,7 +22,7 @@
 - [架构导读](docs/架构导读.md)：用架构图和通俗解释认识 Module、Interface、Seam、Adapter、Libs、Ingestion 与 Query。
 - [完整开发规格](DEV_SPEC.md)：查看上游完整架构、技术设计、测试方案和 A–I 开发任务。
 
-当前 `learning/from-zero` 分支已完成 A1 工程骨架和 A2 pytest 测试基座；A3 Settings 尚未开始。文档中的 RAG 能力仍是上游目标，不代表本分支已经实现。
+当前 `learning/from-zero` 分支已在本地完成阶段 A、B1 LLM interface/Factory 和 B2 Embedding interface/Factory；A3、B1、B2 尚未提交。文档中的其他 RAG 能力仍是上游目标，不代表本分支已经实现。
 
 ---
 
