@@ -1,0 +1,2 @@
+这是 Modular RAG MCP Server 的公开测试样例。
+它只用于验证测试目录和 Fixture 约定，不包含真实个人资料。

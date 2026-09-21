@@ -12,8 +12,27 @@ license = { text = "MIT" }
 keywords = ["mcp", "rag", "retrieval", "knowledge-base"]
 dependencies = []
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
 [project.scripts]
 mcp-server = "main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "unit: 快速单元测试，不依赖外部系统",
+    "integration: 多个模块或 adapter 的集成测试",
+    "e2e: 从入口到结果的端到端测试",
+    "llm: 需要真实模型调用的测试",
+    "slow: 不适合频繁执行的慢测试",
+]
+addopts = "-v --tb=short"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
