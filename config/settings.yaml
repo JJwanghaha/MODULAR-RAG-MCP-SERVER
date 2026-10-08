@@ -33,7 +33,7 @@ evaluation:
   metrics:
     - "hit_rate"
     - "mrr"
-    - "faithfulness"
+  # B6 CustomEvaluator 仅计算检索指标；忠实度评估在 H 阶段接入。
 
 observability:
   log_level: "INFO"

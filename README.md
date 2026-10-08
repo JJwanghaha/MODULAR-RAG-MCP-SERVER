@@ -22,7 +22,16 @@
 - [架构导读](docs/架构导读.md)：用架构图和通俗解释认识 Module、Interface、Seam、Adapter、Libs、Ingestion 与 Query。
 - [完整开发规格](DEV_SPEC.md)：查看上游完整架构、技术设计、测试方案和 A–I 开发任务。
 
-当前 `learning/from-zero` 分支已在本地完成阶段 A、B1 LLM interface/Factory 和 B2 Embedding interface/Factory；A3、B1、B2 尚未提交。文档中的其他 RAG 能力仍是上游目标，不代表本分支已经实现。
+当前 `learning/from-zero` 分支已完成阶段 A 和 B1–B6 的可插拔接口、工厂及测试，并提供 `NoneReranker`、`NoneEvaluator` 和轻量 `CustomEvaluator`。真实模型、递归切分器与 Chroma 接入留给 B7；文档中的完整 RAG 链路仍是上游目标。
+
+当前验收命令（在项目根目录执行）：
+
+```bash
+.venv/bin/python main.py
+.venv/bin/python -m pytest -q
+```
+
+2026-10-08 本地验证：121 个测试通过。默认 `custom` 评估器支持 `hit_rate`、`mrr`；`faithfulness` 等生成质量指标在 H 阶段接入。
 
 ---
 
