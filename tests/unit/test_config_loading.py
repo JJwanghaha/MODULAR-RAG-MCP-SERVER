@@ -122,3 +122,41 @@ def test_default_settings_file_loads() -> None:
     settings = load_settings()
 
     assert settings.vector_store.collection_name == "knowledge_hub"
+
+
+def test_model_connection_options_survive_loading(tmp_path):
+    """网关地址和 Azure 连接参数是可选非敏感字段，不在配置中保存密钥。"""
+    import yaml
+    from src.core.settings import DEFAULT_SETTINGS_PATH
+
+    data = yaml.safe_load(DEFAULT_SETTINGS_PATH.read_text(encoding="utf-8"))
+    data["llm"].update(base_url="https://llm.example/v1", deployment_name="chat-deployment", api_version="test-version", timeout=15.0)
+    data["embedding"].update(base_url="https://embedding.example/v1", deployment_name="embed-deployment", api_version="test-version", timeout=20.0)
+    path = tmp_path / "settings.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    settings = load_settings(path)
+    assert settings.llm.base_url == "https://llm.example/v1"
+    assert settings.llm.deployment_name == "chat-deployment"
+    assert settings.llm.api_version == "test-version"
+    assert settings.llm.timeout == 15.0
+    assert settings.embedding.base_url == "https://embedding.example/v1"
+    assert settings.embedding.deployment_name == "embed-deployment"
+    assert settings.embedding.api_version == "test-version"
+    assert settings.embedding.timeout == 20.0
+
+
+@pytest.mark.parametrize("section,field,value", [
+    ("llm", "timeout", 0), ("embedding", "timeout", -1),
+    ("embedding", "dimensions", 0), ("embedding", "dimensions", True),
+])
+def test_model_connection_config_rejects_invalid_limits(tmp_path, section, field, value):
+    """超时和维度必须具有实际运行意义。"""
+    import yaml
+    from src.core.settings import DEFAULT_SETTINGS_PATH
+
+    data = yaml.safe_load(DEFAULT_SETTINGS_PATH.read_text(encoding="utf-8"))
+    data[section][field] = value
+    path = tmp_path / "settings.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    with pytest.raises(SettingsError, match=f"{section}.{field}"):
+        load_settings(path)

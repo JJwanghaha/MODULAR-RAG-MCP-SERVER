@@ -1,4 +1,4 @@
-"""按重排配置选择策略；真实重排模型留给 B7。"""
+"""按配置选择重排策略，关闭时不初始化模型。"""
 
 from __future__ import annotations
 
@@ -41,3 +41,10 @@ class RerankerFactory:
     def list_providers(cls) -> list[str]:
         """返回注册的策略名，无操作回退由 create 单独处理。"""
         return sorted(cls._PROVIDERS)
+
+
+from src.libs.reranker.llm_reranker import LLMReranker
+from src.libs.reranker.cross_encoder_reranker import CrossEncoderReranker
+
+RerankerFactory.register_provider("llm", LLMReranker)
+RerankerFactory.register_provider("cross_encoder", CrossEncoderReranker)

@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 class SplitterFactory:
-    """注册和创建切分器；正式策略在 B7.5 接入。"""
+    """注册和创建切分器；内置递归字符切分策略。"""
 
     _PROVIDERS: dict[str, type[BaseSplitter]] = {}
 
@@ -47,3 +47,9 @@ class SplitterFactory:
     def list_providers(cls) -> list[str]:
         """返回按名称排序的已注册策略。"""
         return sorted(cls._PROVIDERS)
+
+
+# 只注册类，创建递归切分器时才导入可选依赖。
+from src.libs.splitter.recursive_splitter import RecursiveSplitter
+
+SplitterFactory.register_provider("recursive", RecursiveSplitter)

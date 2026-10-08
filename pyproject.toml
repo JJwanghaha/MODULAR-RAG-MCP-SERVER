@@ -12,11 +12,25 @@ license = { text = "MIT" }
 keywords = ["mcp", "rag", "retrieval", "knowledge-base"]
 dependencies = [
     "pyyaml>=6.0",
+    "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+]
+providers = [
+    "openai>=2.54,<3",
+    "google-genai>=2.29,<3",
+]
+splitters = [
+    "langchain-text-splitters>=1.1.3,<2",
+]
+vector-stores = [
+    "chromadb>=1.5.9,<2",
+]
+rerankers = [
+    "sentence-transformers>=3,<6",
 ]
 
 [project.scripts]

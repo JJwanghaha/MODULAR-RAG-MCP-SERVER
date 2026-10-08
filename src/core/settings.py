@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 from pathlib import Path
 from typing import Any
 
@@ -58,7 +59,7 @@ def _require_int(data: dict[str, Any], key: str, path: str) -> int:
 
 def _require_number(data: dict[str, Any], key: str, path: str) -> float:
     value = _require_value(data, key, path)
-    if not isinstance(value, (int, float)):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise SettingsError(f"Expected number for field: {path}.{key}")
     return float(value)
 
@@ -77,6 +78,13 @@ def _require_list(data: dict[str, Any], key: str, path: str) -> list[Any]:
     return value
 
 
+def _optional_str(data: dict[str, Any], key: str, path: str) -> str | None:
+    """连接字段允许省略，提供时仍须是非空字符串。"""
+    if data.get(key) is None:
+        return None
+    return _require_str(data, key, path)
+
+
 @dataclass(frozen=True)
 class LLMSettings:
     """LLM 运行参数。"""
@@ -85,6 +93,10 @@ class LLMSettings:
     model: str
     temperature: float
     max_tokens: int
+    base_url: str | None = None
+    deployment_name: str | None = None
+    api_version: str | None = None
+    timeout: float = 60.0
 
 
 @dataclass(frozen=True)
@@ -94,6 +106,10 @@ class EmbeddingSettings:
     provider: str
     model: str
     dimensions: int
+    base_url: str | None = None
+    deployment_name: str | None = None
+    api_version: str | None = None
+    timeout: float = 60.0
 
 
 @dataclass(frozen=True)
@@ -199,11 +215,19 @@ class Settings:
                 model=_require_str(llm, "model", "llm"),
                 temperature=_require_number(llm, "temperature", "llm"),
                 max_tokens=_require_int(llm, "max_tokens", "llm"),
+                base_url=_optional_str(llm, "base_url", "llm"),
+                deployment_name=_optional_str(llm, "deployment_name", "llm"),
+                api_version=_optional_str(llm, "api_version", "llm"),
+                timeout=_require_number(llm, "timeout", "llm") if "timeout" in llm else 60.0,
             ),
             embedding=EmbeddingSettings(
                 provider=_require_str(embedding, "provider", "embedding"),
                 model=_require_str(embedding, "model", "embedding"),
                 dimensions=_require_int(embedding, "dimensions", "embedding"),
+                base_url=_optional_str(embedding, "base_url", "embedding"),
+                deployment_name=_optional_str(embedding, "deployment_name", "embedding"),
+                api_version=_optional_str(embedding, "api_version", "embedding"),
+                timeout=_require_number(embedding, "timeout", "embedding") if "timeout" in embedding else 60.0,
             ),
             vector_store=VectorStoreSettings(
                 provider=_require_str(vector_store, "provider", "vector_store"),
@@ -249,6 +273,12 @@ def validate_settings(settings: Settings) -> None:
         raise SettingsError("Missing required field: embedding.provider")
     if not settings.vector_store.provider:
         raise SettingsError("Missing required field: vector_store.provider")
+    if isinstance(settings.embedding.dimensions, bool) or settings.embedding.dimensions <= 0:
+        raise SettingsError("Expected positive integer for field: embedding.dimensions")
+    for section in ("llm", "embedding"):
+        timeout = getattr(settings, section).timeout
+        if not isfinite(timeout) or timeout <= 0:
+            raise SettingsError(f"Expected positive finite number for field: {section}.timeout")
 
 
 def load_settings(path: str | Path | None = None) -> Settings:

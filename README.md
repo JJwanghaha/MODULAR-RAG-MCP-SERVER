@@ -22,16 +22,98 @@
 - [架构导读](docs/架构导读.md)：用架构图和通俗解释认识 Module、Interface、Seam、Adapter、Libs、Ingestion 与 Query。
 - [完整开发规格](DEV_SPEC.md)：查看上游完整架构、技术设计、测试方案和 A–I 开发任务。
 
-当前 `learning/from-zero` 分支已完成阶段 A 和 B1–B6 的可插拔接口、工厂及测试，并提供 `NoneReranker`、`NoneEvaluator` 和轻量 `CustomEvaluator`。真实模型、递归切分器与 Chroma 接入留给 B7；文档中的完整 RAG 链路仍是上游目标。
+当前 `learning/from-zero` 分支已完成阶段 A、B1–B6、B7.1–B7.8 默认实现及 Gemini 扩展。模型接入已通过离线协议测试；Gemini 文档与查询编码真实调用成功，各返回 1 条 768 维向量。生成请求切换到 gemini-3.7-flash 后返回有效回答，但响应 modelVersion 为 gemini-3.8-flash，实际型号差异待核实；剩余额度及计费未查询。Chroma 已完成真实临时库和跨进程持久化验收；两种重排逻辑已通过注入模型测试，不代表真实重排效果。真实知识库尚未入库，完整 RAG 链路仍待后续阶段实现。
 
 当前验收命令（在项目根目录执行）：
 
 ```bash
+uv pip install --python .venv/bin/python -e '.[dev,providers,splitters,vector-stores]'
 .venv/bin/python main.py
 .venv/bin/python -m pytest -q
 ```
 
-2026-10-08 本地验证：121 个测试通过。默认 `custom` 评估器支持 `hit_rate`、`mrr`；`faithfulness` 等生成质量指标在 H 阶段接入。
+2026-10-08 本地验证：308 个测试通过，包含 25 项真实递归切分测试、21 项真实临时 Chroma 测试、30 项 LLM 重排测试、23 项 Cross-Encoder 重排测试及可选依赖检查。模型测试使用模拟 HTTP、真实 SDK 或注入评分器，不调用真实模型，不要求真实 Key。默认 `custom` 评估器支持 `hit_rate`、`mrr`；`faithfulness` 等生成质量指标在 H 阶段接入。
+
+### 重排配置与边界
+
+`RerankerFactory` 已注册 llm 和 cross_encoder；默认仍为 enabled=false、provider=none，因此不会初始化或调用评分模型。LLM 与 Cross-Encoder 返回原候选的浅拷贝，新增顶层 rerank_score，不覆盖检索 score，也不改写文本和 metadata。同分保留输入顺序。
+
+| 后端 | 输入与输出 | 运行条件 |
+|---|---|---|
+| llm | 读取 config/prompts/rerank.txt，将问题和候选组成提示词；解析 passage_id/score JSON | 复用 Settings 中的 LLM，真正调用会消耗对应 API 额度 |
+| cross_encoder | predict 接受问题/文本对，返回每对一个有限分数；显式 top_k 可截断 | 注入评分器可离线运行；真实模型需单独安装运行库并准备本地权重 |
+
+LLM 沿用上游 0–3 标准，自定义提示词也须保持相同输出协议；未知、遗漏、重复 ID 或非法分数会抛 LLMRerankError，而不是静默丢弃候选。只有一个候选时跳过 LLM 调用。LLM 默认返回全部排序候选，截取数量留给 Core 编排。
+
+Cross-Encoder 不限制分数到 0–1 或 0–3，负分可以合法排序。只有显式传入的 top_k 参与截断；配置中的 rerank.top_k 留给后续 D6 编排。本轮没有安装 sentence-transformers 或下载权重；可选 rerankers extra 仅声明运行库。即使以后安装，加载也固定 local_files_only=True、trust_remote_code=False，不自动从模型站点拉取文件。示例 MiniLM 型号已修正为官方的 cross-encoder/ms-marco-MiniLM-L6-v2，但不是已验证的中文最终选型。
+
+两类模型失败均抛出可识别错误，是否使用原检索顺序回退由后续 D6 决定，本轮不自动回退或重试。同步 Cross-Encoder 没有强制中断本地推理的硬超时；只报告评分后端自身的 TimeoutError 或其他失败。默认仍不开启重排，真实 Gemini 评分和真实 Cross-Encoder 效果都未验收。
+
+### 本地向量存储
+
+`vector_store.provider=chroma` 已注册，默认路径为 `data/db/chroma`、collection 为 `knowledge_hub`。导入 Factory 不初始化数据库；创建对象后才加载可选 SDK。B7.6 只实现 upsert/query，不包括文档版本清理、图片文件、BM25 索引或完整摄取编排。
+
+输入记录沿用上游 `id / vector / metadata`。正文必须放在 `metadata.text`，并重复写入 Chroma 的 documents 与 metadatas；顶层 text 不参与映射，缺失 metadata.text 时用 ID。复杂元数据按上游规则转字符串，None 丢弃，空元数据使用占位字段。
+
+```python
+from src.core.settings import load_settings
+from src.libs.vector_store.vector_store_factory import VectorStoreFactory
+
+# 二维演示使用独立 collection，不与真实 768 维语料混用。
+store = VectorStoreFactory.create(load_settings(), collection_name="storage_demo_2d")
+store.upsert([{"id": "sample", "vector": [1.0, 0.0],
+               "metadata": {"text": "示例内容", "source_path": "sample.md"}}])
+results = store.query([1.0, 0.0], top_k=1, filters={"source_path": "sample.md"})
+store.client.close()
+```
+
+初始化已关闭自动 Embedding、匿名遥测和 reset。查询沿用上游 `score=max(0, 1-cosine_distance/2)`，正交向量分数为 0.5，不是原始余弦相似度或答案正确概率。多个过滤字段转换为等价 $and，以兼容当前 SDK。
+
+测试只写入临时目录，结束后关闭 SDK client 并清理；写入进程退出后由新进程读回，证明不是仅在内存里命中。测试进程禁止 socket 连接，在临时工作目录运行，子进程移除模型 Key，避免 SDK 全局配置读项目 .env。生产使用时仍须自行管理服务生命周期、备份与访问控制，元数据过滤本身不等于完整授权。
+
+### 递归切分
+
+`ingestion.splitter=recursive` 已注册，使用 `langchain-text-splitters` 的真实算法。默认 `chunk_size=1000`、`chunk_overlap=200`，长度按字符计算，不是 token；重叠是目标值，不保证每对相邻块精确重叠 200 字符。构造参数可以覆盖 Settings，其他库选项通过构造时的 kwargs 传递。
+
+```python
+from src.core.settings import load_settings
+from src.libs.splitter.splitter_factory import SplitterFactory
+
+splitter = SplitterFactory.create(load_settings())
+chunks = splitter.split_text("# 示例\n\n第一段内容。\n\n第二段内容。")
+```
+
+当前保留上游分隔符，不额外识别中文句号、表格或代码围栏。短 Markdown 样例能保持完整，但超长代码块会被拆开；默认裁掉块首尾空白，也不是逐字符无损重组。特殊自定义分隔符产生空结果时沿用上游回退原文，这种情况下块可能超过 chunk_size。Chunk 的 ID 和来源等元数据留给 C 阶段。
+
+### 模型配置与调用
+
+| 能力 | 已注册 provider | 默认选择 |
+|---|---|---|
+| LLM | `openai`、`azure`、`deepseek`、`ollama`、`gemini` | `gemini` / `gemini-3.7-flash` |
+| Embedding | `openai`、`azure`、`ollama`、`gemini` | `gemini` / `gemini-embedding-2` / 768 维 |
+
+默认型号采用官方示例，须以个人账号实际可用模型为准。公司网关没有配置，也没有自动回退。切换后端时要同时检查 provider、model、连接参数及向量维度，不能只改 provider。更换 Embedding 模型后需要重新编码已有文档。
+
+密钥仅通过环境变量或构造参数传入：`OPENAI_API_KEY`、`AZURE_OPENAI_API_KEY`、`DEEPSEEK_API_KEY`、`GEMINI_API_KEY`。不要将密钥写入 YAML、源码或 Git；未选中的后端不要求密钥。Azure 另需 endpoint 和 api_version，可通过配置的 `base_url`、`api_version` 或 `AZURE_OPENAI_ENDPOINT`、`AZURE_OPENAI_API_VERSION` 提供；部署名使用 `deployment_name`。Ollama 可使用 `base_url` 或 `OLLAMA_BASE_URL`，默认本地端口 11434。
+
+安装 `providers` extra 后，在已配置本地环境变量的情况下可使用以下入口。**这些调用会真实请求服务并消耗额度；启动 main.py 不会自动执行它们。**
+
+```python
+from src.core.settings import load_settings
+from src.libs.llm.base_llm import Message
+from src.libs.llm.llm_factory import LLMFactory
+from src.libs.embedding.embedding_factory import EmbeddingFactory
+
+settings = load_settings()
+llm = LLMFactory.create(settings)
+response = llm.chat([Message("user", "用一句话解释 RAG")])
+
+encoder = EmbeddingFactory.create(settings)
+documents = encoder.embed(["RAG 通过检索文档辅助回答。"])
+query = encoder.embed(["RAG 是什么？"], task_type="RETRIEVAL_QUERY")
+```
+
+当前接口仅支持同步文本调用，不包含流式、工具调用或视觉输入。Gemini 使用原生 `generateContent`，系统消息独立传递；Embedding 2 为每段文本构造独立 Content，并分别处理文档与查询的检索格式。超长输入不在本地估算 token，上游服务错误会作为失败返回；Ollama 明确关闭自动截断。生成的 `max_tokens` 保留上游兼容参数，首次启用其他模型时须核对它的参数支持。
 
 ---
 

@@ -1,4 +1,4 @@
-"""向量存储接口；正式数据库实现留给 B7.6。"""
+"""向量存储接口；本地 Chroma 是 B7.6 的默认实现。"""
 
 from abc import ABC, abstractmethod
 from typing import Any

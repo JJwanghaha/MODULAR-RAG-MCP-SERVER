@@ -40,6 +40,8 @@ class BaseLLM(ABC):
 
     def validate_messages(self, messages: list[Message]) -> None:
         """验证所有 adapter 共享的消息前置条件。"""
+        if not isinstance(messages, list):
+            raise ValueError("Messages must be a list of Message instances")
         if not messages:
             raise ValueError("Messages list cannot be empty")
 
@@ -51,5 +53,7 @@ class BaseLLM(ABC):
                 raise ValueError(
                     f"Message at index {index} has invalid role '{message.role}'"
                 )
-            if not message.content or not message.content.strip():
+            if not isinstance(message.content, str):
+                raise ValueError(f"Message at index {index} has non-string content")
+            if not message.content.strip():
                 raise ValueError(f"Message at index {index} has empty content")

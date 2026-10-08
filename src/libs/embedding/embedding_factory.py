@@ -51,3 +51,15 @@ class EmbeddingFactory:
     def list_providers(cls) -> list[str]:
         """按名称排序返回已注册的 provider。"""
         return sorted(cls._PROVIDERS)
+
+
+# 只注册 adapter 类；不初始化 SDK、不读取密钥、不访问模型。
+from src.libs.embedding.openai_embedding import OpenAIEmbedding
+from src.libs.embedding.azure_embedding import AzureEmbedding
+from src.libs.embedding.ollama_embedding import OllamaEmbedding
+from src.libs.embedding.gemini_embedding import GeminiEmbedding
+
+EmbeddingFactory.register_provider("openai", OpenAIEmbedding)
+EmbeddingFactory.register_provider("azure", AzureEmbedding)
+EmbeddingFactory.register_provider("ollama", OllamaEmbedding)
+EmbeddingFactory.register_provider("gemini", GeminiEmbedding)

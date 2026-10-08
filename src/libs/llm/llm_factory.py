@@ -45,3 +45,17 @@ class LLMFactory:
     def list_providers(cls) -> list[str]:
         """按名称排序返回已注册的 provider。"""
         return sorted(cls._PROVIDERS)
+
+
+# 注册不构造对象，因此导入模块不需要密钥，也不会访问网络。
+from src.libs.llm.openai_llm import OpenAILLM
+from src.libs.llm.azure_llm import AzureLLM
+from src.libs.llm.deepseek_llm import DeepSeekLLM
+from src.libs.llm.ollama_llm import OllamaLLM
+from src.libs.llm.gemini_llm import GeminiLLM
+
+LLMFactory.register_provider("openai", OpenAILLM)
+LLMFactory.register_provider("azure", AzureLLM)
+LLMFactory.register_provider("deepseek", DeepSeekLLM)
+LLMFactory.register_provider("ollama", OllamaLLM)
+LLMFactory.register_provider("gemini", GeminiLLM)

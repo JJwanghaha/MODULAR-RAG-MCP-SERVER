@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 
 class VectorStoreFactory:
-    """B4 只建立注册表，Chroma 实现在 B7.6 注册。"""
+    """按配置创建存储，内置本地 Chroma 后端。"""
 
     _PROVIDERS: dict[str, type[BaseVectorStore]] = {}
 
@@ -41,3 +41,9 @@ class VectorStoreFactory:
     def list_providers(cls) -> list[str]:
         """返回已注册的提供者名称。"""
         return sorted(cls._PROVIDERS)
+
+
+# 注册类不初始化数据库，也不导入可选 SDK。
+from src.libs.vector_store.chroma_store import ChromaStore
+
+VectorStoreFactory.register_provider("chroma", ChromaStore)
