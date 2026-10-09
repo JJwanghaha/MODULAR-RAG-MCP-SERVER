@@ -22,17 +22,96 @@
 - [架构导读](docs/架构导读.md)：用架构图和通俗解释认识 Module、Interface、Seam、Adapter、Libs、Ingestion 与 Query。
 - [完整开发规格](DEV_SPEC.md)：查看上游完整架构、技术设计、测试方案和 A–I 开发任务。
 
-当前 `learning/from-zero` 分支已完成阶段 A、B1–B6、B7.1–B7.8 默认实现及 Gemini 扩展。模型接入已通过离线协议测试；Gemini 文档与查询编码真实调用成功，各返回 1 条 768 维向量。生成请求切换到 gemini-3.7-flash 后返回有效回答，但响应 modelVersion 为 gemini-3.8-flash，实际型号差异待核实；剩余额度及计费未查询。Chroma 已完成真实临时库和跨进程持久化验收；两种重排逻辑已通过注入模型测试，不代表真实重排效果。真实知识库尚未入库，完整 RAG 链路仍待后续阶段实现。
+当前 `learning/from-zero` 分支已完成阶段 A、B1–B9 及 C1–C15，实现个人 Gemini 扩展、PDF/Markdown 解析、切块、清理增强、稠密/稀疏编码、Chroma/BM25/图片登记和摄取 CLI。临时语料完整链路通过，Embedding 使用离线替身；真实知识库入库、视觉描述和重排效果尚未验收。Gemini 编码此前真实调用成功，生成型号标识差异仍待核实。D 检索阶段仅讨论，尚未实现；下文完整产品介绍属于上游参考，不代表此学习分支已具备所有功能。
 
 当前验收命令（在项目根目录执行）：
 
 ```bash
-uv pip install --python .venv/bin/python -e '.[dev,providers,splitters,vector-stores]'
+uv pip install --python .venv/bin/python -e '.[dev,providers,splitters,vector-stores,sparse,vision,loaders]'
 .venv/bin/python main.py
 .venv/bin/python -m pytest -q
 ```
 
-2026-10-08 本地验证：308 个测试通过，包含 25 项真实递归切分测试、21 项真实临时 Chroma 测试、30 项 LLM 重排测试、23 项 Cross-Encoder 重排测试及可选依赖检查。模型测试使用模拟 HTTP、真实 SDK 或注入评分器，不调用真实模型，不要求真实 Key。默认 `custom` 评估器支持 `hit_rate`、`mrr`；`faithfulness` 等生成质量指标在 H 阶段接入。
+2026-10-09 最新全量验证：563 个测试通过。C5–C15 分别新增 17＋17＋17 项测试，编码/存储和完整摄取回归由后台子 agent 执行；真实本地 parser、Splitter、jieba、临时 Chroma/BM25/SQLite 参与链路，不替换内部算法。全量保留 5 条既有 PDF/SWIG 弃用警告，退出时另有同类提示；编译和依赖检查通过。模型测试不调用真实模型、不要求真实 Key。默认 custom 评估器支持 hit_rate、mrr，生成质量指标仍待 H 阶段。
+
+### C5–C15：清理、编码、存储与完整摄取
+
+`IngestionPipeline.run()` 按上游编排：文件检查 → PDF/Markdown 解析 → 切块 → 清理/元数据/图片描述 → Dense＋Sparse 编码 → Chroma/BM25/图片登记 → 成功记录。真实模型增强默认关闭；分批失败立即报错，不返回错位的部分结果。CLI 复用同一入口，不复制处理逻辑。
+
+```bash
+# 只列候选文件：不读取正文、不创建数据库、不调用模型。
+.venv/bin/python scripts/ingest.py --path /path/to/knowledge --collection personal --dry-run
+
+# 以下会读取文档、调用配置的 Embedding 并写入存储；真实运行前自行确认语料与额度。
+.venv/bin/python scripts/ingest.py --path /path/to/knowledge/note.md --collection personal --verbose
+```
+
+`--path` 接受文件或目录，`--file` 为别名；支持大小写无关的 PDF/MD/Markdown。`--force` 绕过已成功记录；`--data-dir` 同时隔离 Chroma/BM25/SQLite/图片位置。退出码 0 为成功或跳过，1 为部分失败，2 为全失败或入口错误。CLI 不自动读取 `.env`；实际模型调用仍需进程环境变量中的 Key，勿提交凭据。
+
+Chroma 保存正文、向量及元数据；BM25 保存词项倒排索引，并用最终 Chroma ID 关联原文；SQLite 图片表只登记 Loader 已保存的文件路径。完整流程的 BM25 文件位于 `data/db/bm25/{collection}/{collection}_bm25.json`。
+
+已知限制：内容哈希跳过仍不区分集合/配置；文档更新替换旧 BM25 块，但不自动删除旧 Chroma 向量或图片记录；多存储没有跨库事务，中途失败允许重试而不保证回滚。字符切分和规则清理不保证 Markdown 结构保真，精确偏移及完整 Trace 后续实现。不能把临时离线链路通过等同于真实语料的检索/回答质量通过。
+
+### C1–C3：对象、文件记录与文档解析
+
+Document 表达整篇解析结果，Chunk 表达切片，ChunkRecord 表达正文与可选向量；三者要求 metadata 含 source_path，支持 to_dict/from_dict。它们不是数据库表，ChunkRecord 也不会自动转换成 Chroma 的写入字典；独立偏移字段需要后续写入模块显式映射。
+
+SQLiteIntegrityChecker 接收明确的 db_path，计算原始文件 SHA256；成功记录才跳过，失败允许重试。SQLite 开启 WAL、每次操作关闭连接，跨进程回读和并发写入已测试；仅复现 C2 的四个核心操作，管理接口留后续阶段。跳过键仍只有内容哈希，不含 collection、模型、提示词或关联图片指纹；这是已知基线限制，不是完整增量版本管理。Loader 不会自行 mark_success。
+
+PdfLoader 使用 MarkItDown 本地转换、禁第三方插件，不配置 LLM/OCR；PyMuPDF 提取内嵌栅格图片并追加占位符。占位符在全文末尾，不代表原始版面位置。图片提取失败可保留文字，扫描 PDF、复杂表格和阅读顺序质量尚未验收。当前 MarkItDown 会把部分伪 PDF 当文本，因此转换前额外用 PDF 结构解析检查，避免后缀造成假成功。
+
+MarkdownLoader 接受 .md/.markdown（大小写不敏感）、UTF-8/BOM，规范换行后保留正文，不重新渲染表格或代码。有效 YAML mapping 移入 frontmatter，日期转换为 JSON 可序列化值；无效或非 mapping 的头部保留。标题按 frontmatter.title、首个 H1、文件名选取；来源字段不受 frontmatter 覆盖。
+
+标准 Markdown 图片由解析器识别，不用全文正则替换。范围内的 PNG/JPEG/WebP 本地图片验证后复制到管理目录，保留原件和 alt，记录相对最终 Document.text 的字符偏移。远程图片不下载；缺失、越界、格式/复制失败和无法可靠映射的标准引用保留原文并记录原因。HTML、Wiki、Mermaid 和解析器拒绝的特殊链接仅保留，不承诺全部列入 unprocessed_images；表格转义竖线造成的图片映射限制已有测试。source_root 默认是 MD 所在目录，可明确设置为整个语料根；它只约束图片资源，不等于访问控制。
+
+```python
+from src.libs.loader.markdown_loader import MarkdownLoader
+
+# 将示例路径换成明确选择的文档；这只解析，不会 Embedding 或入库。
+loader = MarkdownLoader(source_root="/path/to/knowledge", image_storage_dir="data/images")
+document = loader.load("/path/to/knowledge/note.md")
+```
+
+两个 Loader 仍可独立调用；C14/C15 已提供自动格式路由、目录批量入口和完整摄取。C7 启用时生成图片描述，再由编码模块计算向量、写入索引。未来只围绕个人 Gemini 推进，已有 Azure 后端保留但不再新增相关工作。
+
+### C4：文档切片包装
+
+DocumentChunker(settings).split_document(document)→list[Chunk] 使用 SplitterFactory 创建已有切分器，再将字符串片段包装成 Chunk。ID 为 {doc_id}_{index:04d}_{文本SHA256前8位}；继承 metadata，重建 chunk_index/source_ref/image_refs，只带当前块引用的 images，未引用时不复制整篇文档的图片列表。不读取图片文件、调用模型或生成向量。
+
+source_ref 仅写入 metadata，独立 Chunk.source_ref/start_offset/end_offset 保持 None。图片记录的偏移仍相对 Document.text，不转换为块内偏移；metadata 是浅拷贝，嵌套值和图片记录仍共享。page_num 只是首张关联图片的页码提示，MD 图片可能为 None，不保证整个块的页范围。
+
+沿用上游正则识别完整占位符：未知 ID 可保留 image_refs，但不虚构图片路径；重复引用不去重。字符切分可能切断标记，使关联丢失；代码内字面量占位符也可能被识别。表格、代码和图片结构保护、可靠偏移、Trace 和图片去重未在 C4 提前实现。
+
+```python
+from src.core.settings import load_settings
+from src.core.types import Document
+from src.ingestion.chunking.document_chunker import DocumentChunker
+
+document = Document("doc_demo", "# 示例\n\n正文", {"source_path": "demo.md"})
+chunks = DocumentChunker(load_settings()).split_document(document)
+```
+
+### 视觉接口：B8 的范围
+
+`ImageInput` 使用 path、data（原始 bytes）、base64 三选一，mime_type 默认 image/png。构造只检查来源数量，不读取文件、不解码 Base64，也不证明输入是有效图片。
+
+`BaseVisionLLM.chat_with_image(text, image, messages=None, trace=None, **kwargs)` 返回同一 ChatResponse。它独立于文本 BaseLLM，但底层可以选择同一个多模态模型；preprocess_image 默认原样返回，压缩与格式转换留给具体 adapter。
+
+`LLMFactory` 分别维护文字与视觉注册表。create_vision_llm 优先按 settings.vision_llm.provider 选后端；未提供视觉配置时，沿用上游的 settings.llm.provider 选名规则，但仍只查视觉注册表。配置的视觉 provider 未注册时直接报错，不回退到文字 adapter 或其他供应商。
+
+Settings 新增可选 vision_llm，提供时需要 enabled、provider、model、max_image_size，另有可选 Azure/服务地址字段；类型中不保存 api_key。max_image_size 校验为非布尔正整数，不意味着基类已经执行压缩。enabled 由后续 ImageCaptioner 调用方控制，工厂本身不把它当作禁用开关。
+
+默认 YAML 仍不配置 vision_llm，不自动调用视觉模型。B9 已注册 azure/gemini 视觉后端；文字 Gemini 的 chat 仍不接收图片，传图要显式使用 create_vision_llm 与 chat_with_image。C7 才把图片描述写回文档，Embedding 再编码文本；视觉 adapter 完成不等于图片已进入知识库。
+
+### 视觉后端：B9 的运行边界
+
+Azure 使用部署路径、api-version、api-key 和文字/image_url 消息，沿用上游图文协议；HTTP 实现复用项目已有 httpx，不再引入 requests。API 版本须通过配置、环境变量或构造参数明确提供，不照搬上游旧默认版本。Gemini 使用原生 generateContent，文字与图片字节组成 Content/Part，复用既有 Google SDK；不是转发到 Azure 或公司网关。
+
+两种后端默认使用 llm.timeout（当前 60 秒），构造参数可覆盖。密钥只从构造参数或对应环境变量读取：Azure 为 AZURE_OPENAI_API_KEY，Gemini 为 GEMINI_API_KEY；Azure 另需 endpoint/api_version。未选择的后端不要求它的 Key。自有 client 请求后关闭，注入 client 由调用方管理；自有 Google client 明确只尝试一次，注入 client 的重试策略由调用方设置。没有自动供应商回退。
+
+vision extra 增加 Pillow，本次验证版本为 12.3.0。路径/bytes 输入超限时保持比例缩小并保留原图文件；共享图片实现不会重复写一套处理逻辑。基线继续保留 Base64 不缩放、无 Pillow 不缩放的上游行为；缩小像素尺寸不保证文件字节更小。PNG/JPEG/WebP 测试通过，但 MIME 仍由调用方声明，不自动推断或保证与真实格式匹配。
+
+Azure 将 Base64 原样放入 data URL，Gemini 会解码标准 Base64 后交给 SDK；不支持把 HTTP 图片 URL 或完整 data URL 当作 ImageInput.base64。当前为单图、同步调用，只有文字历史；不包含 Files API、多图历史、图片描述缓存或完整 Trace。本轮只使用临时生成图片和模拟 HTTP，没有读取真实知识库图片、上传图片或消耗模型额度；真实可用性和描述质量另行验收。
 
 ### 重排配置与边界
 
@@ -113,7 +192,7 @@ documents = encoder.embed(["RAG 通过检索文档辅助回答。"])
 query = encoder.embed(["RAG 是什么？"], task_type="RETRIEVAL_QUERY")
 ```
 
-当前接口仅支持同步文本调用，不包含流式、工具调用或视觉输入。Gemini 使用原生 `generateContent`，系统消息独立传递；Embedding 2 为每段文本构造独立 Content，并分别处理文档与查询的检索格式。超长输入不在本地估算 token，上游服务错误会作为失败返回；Ollama 明确关闭自动截断。生成的 `max_tokens` 保留上游兼容参数，首次启用其他模型时须核对它的参数支持。
+文本 chat 接口仅支持同步文本调用，不包含流式或工具调用；图片输入使用独立 chat_with_image 接口。Gemini 使用原生 generateContent，系统消息独立传递；Embedding 2 为每段文本构造独立 Content，并分别处理文档与查询的检索格式。超长输入不在本地估算 token，上游服务错误会作为失败返回；Ollama 明确关闭自动截断。生成的 max_tokens 保留上游兼容参数，首次启用其他模型时须核对它的参数支持。
 
 ---
 

@@ -113,6 +113,20 @@ class EmbeddingSettings:
 
 
 @dataclass(frozen=True)
+class VisionLLMSettings:
+    """视觉调用独立配置；max_image_size 供后续 adapter 使用。"""
+
+    enabled: bool
+    provider: str
+    model: str
+    max_image_size: int
+    api_version: str | None = None
+    azure_endpoint: str | None = None
+    deployment_name: str | None = None
+    base_url: str | None = None
+
+
+@dataclass(frozen=True)
 class VectorStoreSettings:
     """向量存储参数。"""
 
@@ -168,6 +182,8 @@ class IngestionSettings:
     chunk_overlap: int
     splitter: str
     batch_size: int
+    chunk_refiner: dict[str, Any] | None = None
+    metadata_enricher: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -182,6 +198,7 @@ class Settings:
     evaluation: EvaluationSettings
     observability: ObservabilitySettings
     ingestion: IngestionSettings | None = None
+    vision_llm: VisionLLMSettings | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Settings":
@@ -202,11 +219,34 @@ class Settings:
         if ingestion is not None:
             if not isinstance(ingestion, dict):
                 raise SettingsError("Expected mapping for field: settings.ingestion")
+            for name in ("chunk_refiner", "metadata_enricher"):
+                option = ingestion.get(name)
+                if option is not None:
+                    if not isinstance(option, dict):
+                        raise SettingsError(f"Expected mapping for field: ingestion.{name}")
+                    if "use_llm" in option and not isinstance(option["use_llm"], bool):
+                        raise SettingsError(f"Expected boolean for field: ingestion.{name}.use_llm")
             ingestion_settings = IngestionSettings(
                 chunk_size=_require_int(ingestion, "chunk_size", "ingestion"),
                 chunk_overlap=_require_int(ingestion, "chunk_overlap", "ingestion"),
                 splitter=_require_str(ingestion, "splitter", "ingestion"),
                 batch_size=_require_int(ingestion, "batch_size", "ingestion"),
+                chunk_refiner=ingestion.get("chunk_refiner"),
+                metadata_enricher=ingestion.get("metadata_enricher"),
+            )
+
+        vision_llm_settings = None
+        if "vision_llm" in data:
+            vision = _require_mapping(data, "vision_llm", "settings")
+            vision_llm_settings = VisionLLMSettings(
+                enabled=_require_bool(vision, "enabled", "vision_llm"),
+                provider=_require_str(vision, "provider", "vision_llm"),
+                model=_require_str(vision, "model", "vision_llm"),
+                max_image_size=_require_int(vision, "max_image_size", "vision_llm"),
+                api_version=_optional_str(vision, "api_version", "vision_llm"),
+                azure_endpoint=_optional_str(vision, "azure_endpoint", "vision_llm"),
+                deployment_name=_optional_str(vision, "deployment_name", "vision_llm"),
+                base_url=_optional_str(vision, "base_url", "vision_llm"),
             )
 
         return cls(
@@ -262,6 +302,7 @@ class Settings:
                 ),
             ),
             ingestion=ingestion_settings,
+            vision_llm=vision_llm_settings,
         )
 
 
@@ -279,6 +320,10 @@ def validate_settings(settings: Settings) -> None:
         timeout = getattr(settings, section).timeout
         if not isfinite(timeout) or timeout <= 0:
             raise SettingsError(f"Expected positive finite number for field: {section}.timeout")
+    if settings.vision_llm is not None:
+        size = settings.vision_llm.max_image_size
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            raise SettingsError("Expected positive integer for field: vision_llm.max_image_size")
 
 
 def load_settings(path: str | Path | None = None) -> Settings:
