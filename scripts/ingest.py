@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.core.settings import DEFAULT_SETTINGS_PATH, load_settings
+from src.core.trace import TraceCollector, TraceContext
 from src.ingestion.pipeline import IngestionPipeline, PipelineResult, SUPPORTED_EXTENSIONS
 
 
@@ -83,11 +84,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"流水线初始化失败：{type(exc).__name__}", file=sys.stderr)
         return 2
     results = []
+    collector = TraceCollector.from_settings(settings)
     try:
         for number, file in enumerate(files, 1):
             print(f"[{number}/{len(files)}] {file}")
             progress = (lambda stage, step, total: print(f"  阶段 {step}/{total}：{stage}")) if args.verbose else None
-            result = pipeline.run(file, on_progress=progress)
+            trace = TraceContext(trace_type="ingestion") if settings.observability.trace_enabled else None
+            if trace is not None:
+                trace.metadata["source"] = "cli"
+            try:
+                result = pipeline.run(file, trace=trace, on_progress=progress)
+            finally:
+                if trace is not None:
+                    trace.finish()
+                    collector.collect(trace)
+            if trace is not None and args.verbose:
+                print(f"  Trace：{trace.trace_id}")
             results.append(result)
             if result.success:
                 print("  跳过：已有成功记录" if result.stages["integrity"]["skipped"]

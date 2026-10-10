@@ -24,17 +24,27 @@ class ChromaStore(BaseVectorStore):
         self.collection_name = kwargs.get(
             "collection_name", settings.vector_store.collection_name
         )
+        create_if_missing = kwargs.get("create_if_missing", True)
+        if not create_if_missing and not (self.persist_directory / "chroma.sqlite3").is_file():
+            raise FileNotFoundError("Chroma database does not exist")
         self.client = chromadb.PersistentClient(
             path=str(self.persist_directory),
             settings=ChromaSettings(
                 _env_file=None, anonymized_telemetry=False, allow_reset=False
             ),
         )
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name,
-            metadata={"hnsw:space": "cosine"},
-            embedding_function=None,
-        )
+        try:
+            if create_if_missing:
+                self.collection = self.client.get_or_create_collection(
+                    name=self.collection_name, metadata={"hnsw:space": "cosine"}, embedding_function=None,
+                )
+            else:
+                self.collection = self.client.get_collection(name=self.collection_name, embedding_function=None)
+        except Exception as exc:
+            self.client.close()
+            if not create_if_missing and isinstance(exc, chromadb.errors.NotFoundError):
+                raise FileNotFoundError("Chroma collection does not exist") from None
+            raise
 
     def upsert(self, records: list[dict[str, Any]], trace=None, **kwargs: Any) -> None:
         """按上游约定，同时存文本和 metadata 中的文本副本。"""
@@ -104,3 +114,16 @@ class ChromaStore(BaseVectorStore):
             else:
                 sanitized[key] = str(value)
         return sanitized
+
+    def get_by_ids(self, ids: list[str], trace=None, **kwargs: Any) -> list[dict[str, Any]]:
+        """按请求顺序取回原文；缺失 ID 保留空位置，不压缩列表。"""
+        if not ids:
+            raise ValueError("IDs list cannot be empty")
+        requested = [str(identifier) for identifier in ids]
+        try:
+            result = self.collection.get(ids=list(dict.fromkeys(requested)), include=["documents", "metadatas"])
+        except Exception as exc:
+            raise RuntimeError(f"Chroma get_by_ids failed: {type(exc).__name__}") from None
+        records = {identifier: {"id": identifier, "text": document or "", "metadata": metadata or {}}
+                   for identifier, document, metadata in zip(result["ids"], result["documents"], result["metadatas"])}
+        return [records.get(identifier, {}) for identifier in requested]

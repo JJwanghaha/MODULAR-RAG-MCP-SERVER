@@ -75,6 +75,20 @@ class ImageStorage:
         """与上游一致，只判断登记是否存在。"""
         return self.get_image_path(image_id) is not None
 
+    @staticmethod
+    def get_existing_image_path(image_id: str, db_path: str | Path, collection: str | None = None) -> str | None:
+        """MCP 读取已有登记；不创建数据库、表或目录，指定集合时不跨集合查图。"""
+        path = resolve_path(db_path)
+        if not path.is_file():
+            return None
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
+            query, parameters = "SELECT file_path FROM image_index WHERE image_id = ?", [image_id]
+            if collection is not None:
+                query += " AND collection = ?"
+                parameters.append(collection)
+            row = connection.execute(query, parameters).fetchone()
+        return row[0] if row else None
+
     def list_images(self, collection: str | None = None, doc_hash: str | None = None) -> list[dict[str, Any]]:
         """按集合及文档哈希筛选元数据，不返回图片字节。"""
         query, values = "SELECT * FROM image_index WHERE 1=1", []

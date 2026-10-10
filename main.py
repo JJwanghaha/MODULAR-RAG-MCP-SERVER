@@ -1,23 +1,10 @@
 """Modular RAG MCP Server 的启动入口。"""
 
-import sys
+def main(argv: list[str] | None = None) -> int:
+    """开发目录入口和安装后的 mcp-server 复用同一 stdio 实现。"""
+    from src.mcp_server.server import main as server_main
 
-from src.core.settings import SettingsError, load_settings
-from src.observability.logger import get_logger
-
-
-def main() -> int:
-    """加载配置；MCP Server 将在 E 阶段接入。"""
-    try:
-        settings = load_settings()
-    except SettingsError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
-        return 1
-
-    logger = get_logger(__name__, settings.observability.log_level)
-    logger.info("Settings loaded successfully.")
-    logger.info("MCP Server will be implemented in Phase E.")
-    return 0
+    return server_main(argv)
 
 
 if __name__ == "__main__":

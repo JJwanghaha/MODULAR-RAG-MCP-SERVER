@@ -1,6 +1,7 @@
 """C1 共用数据类型；对象不负责解析、编码或数据库写入。"""
 
 from dataclasses import asdict, dataclass, field
+from math import isfinite
 from typing import Any
 
 
@@ -82,3 +83,48 @@ class ChunkRecord:
                    sparse_vector: dict[str, float] | None = None) -> "ChunkRecord":
         """复制顶层 metadata；上游不自动搬运独立偏移字段。"""
         return cls(chunk.id, chunk.text, chunk.metadata.copy(), dense_vector, sparse_vector)
+
+
+@dataclass
+class ProcessedQuery:
+    """D1 输出；保留原始问题，expanded_terms 按上游预留但不生成。"""
+
+    original_query: str
+    keywords: list[str] = field(default_factory=list)
+    filters: dict[str, Any] = field(default_factory=dict)
+    expanded_terms: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """复制数据，不触发检索。"""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ProcessedQuery":
+        """恢复处理后的查询。"""
+        return cls(**data)
+
+
+@dataclass
+class RetrievalResult:
+    """D2–D4 统一命中；score 属于当前阶段，不是概率或统一尺度。"""
+
+    chunk_id: str
+    score: float
+    text: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """允许 BM25 负分，但拒绝空 ID 和非有限分数。"""
+        if not isinstance(self.chunk_id, str) or not self.chunk_id:
+            raise ValueError("chunk_id must be a nonempty string")
+        if not isinstance(self.score, (int, float)) or isinstance(self.score, bool) or not isfinite(self.score):
+            raise ValueError("score must be a finite number")
+
+    def to_dict(self) -> dict[str, Any]:
+        """序列化正文与来源元数据。"""
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RetrievalResult":
+        """恢复命中，不重新评分。"""
+        return cls(**data)

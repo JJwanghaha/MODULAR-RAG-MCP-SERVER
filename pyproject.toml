@@ -33,6 +33,10 @@ vector-stores = [
 sparse = [
     "jieba>=0.42.1,<1",
 ]
+mcp = [
+    "mcp>=1.26,<2",
+    "jsonschema>=4.20,<5",
+]
 rerankers = [
     "sentence-transformers>=3,<6",
 ]
@@ -47,7 +51,7 @@ loaders = [
 ]
 
 [project.scripts]
-mcp-server = "main:main"
+mcp-server = "src.mcp_server.server:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

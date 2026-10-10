@@ -1,12 +1,14 @@
 """C14：沿用上游六阶段摄取流程，补上 Markdown 路由。"""
 
 import logging
+import time
 from dataclasses import dataclass, field, replace
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Callable
 
 from src.core.settings import Settings, load_settings, resolve_path
+from src.core.trace import TraceCollector, TraceContext
 from src.ingestion.chunking.document_chunker import DocumentChunker
 from src.ingestion.embedding.batch_processor import BatchProcessor
 from src.ingestion.embedding.dense_encoder import DenseEncoder
@@ -90,13 +92,22 @@ class IngestionPipeline:
 
     def run(self, file_path: str | Path, trace: Any = None,
             on_progress: Callable[[str, int, int], None] | None = None) -> PipelineResult:
-        """解析、增强、编码和存储；错误用阶段＋类型记录，不暴露私有正文或 Key。"""
+        """调用方拥有传入的 Trace 并负责收集；此处打点，不自动创建日志文件。"""
         path = Path(file_path).resolve()
         stages: dict[str, Any] = {}
         file_hash = None
         stage = "integrity"
         document = None
         chunks, vector_ids = [], []
+        stage_started = time.monotonic()
+        if trace is not None:
+            trace.metadata.update({"source_path": str(path), "collection": self.collection,
+                                   "force": self.force, "status": "running"})
+
+        def record(name: str, data: dict) -> None:
+            if trace is not None:
+                trace.record_stage(name, data, elapsed_ms=(time.monotonic() - stage_started) * 1000)
+                logger.info("Trace %s stage=%s status=%s", trace.trace_id, name, data.get("status", "success"))
 
         def notify(name: str, step: int) -> None:
             if on_progress is not None:
@@ -116,13 +127,21 @@ class IngestionPipeline:
             file_hash = self.integrity_checker.compute_sha256(str(path))
             skipped = not self.force and self.integrity_checker.should_skip(file_hash)
             stages["integrity"] = {"file_hash": file_hash, "skipped": skipped}
+            record("integrity", {"method": "sha256", "status": "skipped" if skipped else "success",
+                                 **stages["integrity"]})
             notify("integrity", 1)
             if skipped:
+                if trace is not None:
+                    trace.metadata.update({"status": "skipped", "doc_id": file_hash})
                 return PipelineResult(True, str(path), file_hash, stages=stages)
 
             stage = "initialization"
+            stage_started = time.monotonic()
             self._initialize_processing()
+            record("initialization", {"method": "pipeline_setup", "status": "success",
+                "embedding_provider": self.settings.embedding.provider, "embedding_model": self.settings.embedding.model})
             stage = "loading"
+            stage_started = time.monotonic()
             image_dir = self.data_dir / "images" / self.collection
             loader = (PdfLoader(extract_images=True, image_storage_dir=image_dir) if path.suffix.lower() == ".pdf"
                       else MarkdownLoader(image_storage_dir=image_dir, source_root=self.source_root))
@@ -133,14 +152,23 @@ class IngestionPipeline:
             images = document.metadata.get("images", [])
             stages["loading"] = {"doc_id": document.id, "doc_type": document.metadata["doc_type"],
                                  "text_length": len(document.text), "image_count": len(images)}
+            record("load", {"method": "markitdown" if path.suffix.lower() == ".pdf" else "markdown",
+                            "status": "success", **stages["loading"], "text_preview": document.text})
             notify("load", 2)
 
             stage = "chunking"
+            stage_started = time.monotonic()
             chunks = self.chunker.split_document(document)
             stages["chunking"] = {"chunk_count": len(chunks)}
+            record("split", {"method": self.settings.ingestion.splitter, "status": "success",
+                "chunk_size": self.settings.ingestion.chunk_size, "chunk_overlap": self.settings.ingestion.chunk_overlap,
+                **stages["chunking"], "chunks": [{"chunk_id": c.id, "text": c.text, "char_len": len(c.text),
+                    "chunk_index": c.metadata.get("chunk_index", i)} for i, c in enumerate(chunks)]} if trace is not None else {})
             notify("split", 3)
 
             stage = "transform"
+            stage_started = time.monotonic()
+            before = {c.id: c.text for c in chunks} if trace is not None else {}
             chunks = self.chunk_refiner.transform(chunks, trace=trace)
             chunks = self.metadata_enricher.transform(chunks, trace=trace)
             chunks = self.image_captioner.transform(chunks, trace=trace)
@@ -148,16 +176,32 @@ class IngestionPipeline:
                                    "refined_by_llm": sum(c.metadata.get("refined_by") == "llm" for c in chunks),
                                    "enriched_by_llm": sum(c.metadata.get("enriched_by") == "llm" for c in chunks),
                                    "captioned_chunks": sum(bool(c.metadata.get("image_captions")) for c in chunks)}
+            record("transform", {"method": "refine+enrich+caption", "status": "success", **stages["transform"],
+                "chunks": [{"chunk_id": c.id, "text_before": before.get(c.id, ""), "text_after": c.text,
+                    "refined_by": c.metadata.get("refined_by"), "enriched_by": c.metadata.get("enriched_by"),
+                    "title": c.metadata.get("title", ""), "tags": list(c.metadata.get("tags", [])),
+                    "summary": c.metadata.get("summary", ""), "image_captions": [dict(item) for item in c.metadata.get("image_captions", [])]}
+                    for c in chunks]} if trace is not None else {})
             notify("transform", 4)
 
             stage = "encoding"
+            stage_started = time.monotonic()
             encoded = self.batch_processor.process(chunks, trace=trace)
             stages["encoding"] = {"dense_vector_count": len(encoded.dense_vectors),
                                   "sparse_doc_count": len(encoded.sparse_stats), "batch_count": encoded.batch_count,
                                   "dense_dimension": len(encoded.dense_vectors[0])}
+            record("embed", {"method": "batch_processor", "status": "success", **stages["encoding"],
+                "provider": self.settings.embedding.provider, "model": self.settings.embedding.model,
+                "batch_size": self.settings.ingestion.batch_size,
+                "chunks": [{"chunk_id": c.id, "char_len": len(c.text), "dense_dim": len(vector),
+                    "doc_length": stat["doc_length"], "unique_terms": stat["unique_terms"],
+                    "top_terms": [{"term": term, "freq": freq} for term, freq in
+                                  sorted(stat["term_frequencies"].items(), key=lambda pair: pair[1], reverse=True)[:10]]}
+                    for c, vector, stat in zip(chunks, encoded.dense_vectors, encoded.sparse_stats)]} if trace is not None else {})
             notify("embed", 5)
 
             stage = "storage"
+            stage_started = time.monotonic()
             stages["storage"] = {"vector_count": 0, "bm25_docs": 0, "images_indexed": 0}
             vector_ids = self.vector_upserter.upsert(chunks, encoded.dense_vectors, trace=trace)
             stages["storage"]["vector_count"] = len(vector_ids)
@@ -170,13 +214,30 @@ class IngestionPipeline:
                 self.image_storage.register_image(image["id"], image["path"], self.collection,
                                                   file_hash, image.get("page"))
                 stages["storage"]["images_indexed"] += 1
-            notify("upsert", 6)
+            record("upsert", {"method": self.settings.vector_store.provider, "status": "success", **stages["storage"],
+                "dense_store": {"backend": self.settings.vector_store.provider, "collection": self.collection,
+                                "path": self.settings.vector_store.persist_directory},
+                "sparse_store": {"backend": "BM25", "path": str(self.data_dir / "db" / "bm25" / self.collection)},
+                "image_store": {"backend": "SQLite", "path": str(self.data_dir / "db" / "image_index.db")},
+                "chunk_mapping": [{"chunk_id": c.id, "vector_id": vid} for c, vid in zip(chunks, vector_ids)],
+                "images": [{"image_id": image["id"], "file_path": str(image["path"]), "page": image.get("page")}
+                           for image in images]} if trace is not None else {})
             stage = "completion"
+            stage_started = time.monotonic()
             self.integrity_checker.mark_success(file_hash, str(path), self.collection)
+            record("completion", {"method": "mark_success", "status": "success"})
+            if trace is not None:
+                trace.metadata.update({"status": "success", "doc_id": file_hash, "chunk_count": len(chunks), "image_count": len(images)})
+            # 最后一个进度通知放在成功记录之后，失败不能显示完整的 6/6。
+            notify("upsert", 6)
             return PipelineResult(True, str(path), file_hash, len(chunks), len(images), vector_ids, stages=stages)
         except Exception as exc:
             error = f"{stage} failed: {type(exc).__name__}"
             stages["failure"] = {"stage": stage, "error_type": type(exc).__name__}
+            record("error", {"method": stage, "status": "error", **stages["failure"],
+                             "partial_storage": dict(stages.get("storage", {}))})
+            if trace is not None:
+                trace.metadata.update({"status": "error", "failed_stage": stage, "error_type": type(exc).__name__})
             logger.error("Ingestion %s", error)
             if file_hash is not None and not self._closed:
                 try:
@@ -206,7 +267,12 @@ def run_pipeline(file_path: str | Path, settings_path: str | Path | None = None,
                  collection: str = "default", force: bool = False) -> PipelineResult:
     """单次调用便捷入口，结束时确保关闭存储。"""
     pipeline = IngestionPipeline(load_settings(settings_path), collection, force)
+    trace = TraceContext(trace_type="ingestion") if pipeline.settings.observability.trace_enabled else None
     try:
-        return pipeline.run(file_path)
+        return pipeline.run(file_path, trace=trace)
     finally:
-        pipeline.close()
+        try:
+            pipeline.close()
+        finally:
+            if trace is not None:
+                TraceCollector.from_settings(pipeline.settings).collect(trace)

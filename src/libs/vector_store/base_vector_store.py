@@ -34,6 +34,11 @@ class BaseVectorStore(ABC):
             if not record["vector"]:
                 raise ValueError(f"Record at index {index} has empty vector")
 
+    def get_by_ids(self, ids: list[str], trace=None, **kwargs) -> list[dict[str, Any]]:
+        """按输入顺序返回 id/text/metadata；缺失位置为 {}，未实现的 adapter 明确报错。"""
+        # 不新增抽象约束：只实现旧 upsert/query 的 adapter 仍可用于稠密检索。
+        raise NotImplementedError("This VectorStore does not support get_by_ids")
+
     def validate_query_vector(self, vector: list[float], top_k: int) -> None:
         """验证查询向量形状和结果数量。"""
         if not isinstance(vector, (list, tuple)):

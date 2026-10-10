@@ -22,17 +22,37 @@
 - [架构导读](docs/架构导读.md)：用架构图和通俗解释认识 Module、Interface、Seam、Adapter、Libs、Ingestion 与 Query。
 - [完整开发规格](DEV_SPEC.md)：查看上游完整架构、技术设计、测试方案和 A–I 开发任务。
 
-当前 `learning/from-zero` 分支已完成阶段 A、B1–B9 及 C1–C15，实现个人 Gemini 扩展、PDF/Markdown 解析、切块、清理增强、稠密/稀疏编码、Chroma/BM25/图片登记和摄取 CLI。临时语料完整链路通过，Embedding 使用离线替身；真实知识库入库、视觉描述和重排效果尚未验收。Gemini 编码此前真实调用成功，生成型号标识差异仍待核实。D 检索阶段仅讨论，尚未实现；下文完整产品介绍属于上游参考，不代表此学习分支已具备所有功能。
+当前 `learning/from-zero` 分支已实现并验证阶段 A、B1–B9、C1–C15、D1–D7、E1–E6 和 F1–F5：个人 Gemini 扩展、PDF/Markdown 摄取、Dense/BM25 混合检索、RRF 融合、重排回退、MCP 三工具和双链路 Trace。临时语料完整离线链路已通过，Embedding 使用离线替身。真实知识库入库、实际 Agent 宿主接入、视觉描述和重排效果尚未验收。Gemini 编码此前真实调用成功，生成型号标识差异仍待核实。Dashboard、完整评估和最终验收留 G/H/I 阶段；下文完整产品介绍属于上游参考，不代表此学习分支已具备所有功能。
 
 当前验收命令（在项目根目录执行）：
 
 ```bash
-uv pip install --python .venv/bin/python -e '.[dev,providers,splitters,vector-stores,sparse,vision,loaders]'
-.venv/bin/python main.py
+uv pip install --python .venv/bin/python -e '.[dev,providers,splitters,vector-stores,sparse,vision,loaders,mcp]'
+.venv/bin/python main.py --check
 .venv/bin/python -m pytest -q
 ```
 
-2026-10-09 最新全量验证：563 个测试通过。C5–C15 分别新增 17＋17＋17 项测试，编码/存储和完整摄取回归由后台子 agent 执行；真实本地 parser、Splitter、jieba、临时 Chroma/BM25/SQLite 参与链路，不替换内部算法。全量保留 5 条既有 PDF/SWIG 弃用警告，退出时另有同类提示；编译和依赖检查通过。模型测试不调用真实模型、不要求真实 Key。默认 custom 评估器支持 hit_rate、mrr，生成质量指标仍待 H 阶段。
+`main.py` 启动 MCP stdio 服务并等待客户端消息。日常检查用 `--check`，实际客户端使用 `main.py` 或安装后的 `mcp-server`；E3–E6 本地接入后，默认登记 query_knowledge_hub、list_collections、get_document_summary 三个工具，检索结果含结构化引用和可选关联图片。stdout 专用于协议，日志/检查结果写 stderr；启动或列工具不创建模型/数据库，实际检索才调用配置的 Embedding。`--data-dir` 可与摄取/查询 CLI 共用隔离数据根目录。完整业务测试结果以学习仓库工程记录最新阶段为准；未代表真实模型/语料质量已验收。
+
+2026-10-10 最新全量验证：705 个测试通过（13.01 秒），覆盖 D 混合检索/CLI、E 真实 MCP stdio 与离线业务闭环、F Trace/JSONL/双链路打点及进度回调。真实本地 parser、Splitter、jieba、临时 Chroma/BM25/SQLite 和官方 MCP ClientSession 参与链路，不替换内部算法。保留 5 条既有 PDF/SWIG 弃用警告；模型测试不调用真实模型、不要求真实 Key。默认 custom 评估器支持 hit_rate、mrr，生成质量指标仍待 H 阶段。
+
+### D/E/F：混合检索、MCP 与 Trace
+
+```bash
+# 查询会调用配置的 Embedding；执行前确认已经摄取目标资料及模型额度。
+.venv/bin/python scripts/query.py --query "如何使用知识库？" --collection personal --top-k 5 --verbose
+
+# 只检查三个 MCP 工具的注册，不读取知识库或调用模型。
+.venv/bin/python main.py --check
+```
+
+查询流程为问题关键词/过滤条件 → Dense＋BM25 → 已召回候选过滤 → RRF 或单路回退 → 可选重排。`--no-rerank` 强制关闭评分模型，`--data-dir` 与摄取使用同一隔离数据根目录。CLI 退出码 0 表示正常（允许空结果），1 表示查询运行失败，2 表示参数/配置/初始化失败。当前返回检索证据，不生成最终回答。
+
+MCP 三工具分别用于检索证据、列出集合、回查文档摘要；返回结构化来源引用和受管理图片。通过集合筛选不等于已实现多用户权限。官方 MCP Python SDK 使用 1.x 协议实现，暂不包含 HTTP 远程部署或实际 Agent 宿主配置验收。
+
+`observability.trace_enabled` 控制 CLI/MCP 入口创建/收集 Trace，`trace_file` 默认 `./logs/traces.jsonl`（相对仓库根目录）；每次执行追加一个完整 JSON 对象。MCP 查询返回的 `metadata.trace_id` 可关联记录。查询保留完整问题/候选/分数/顺序，摄取保留解析正文、切分内容、增强前后、编码统计和存储映射；异常只记类型，向量和图片载荷不落盘。关闭时不创建 Trace 文件。直接调用业务类时，传入的 Trace 由调用方收尾，业务类不重复收集。
+
+Trace 包含私人正文，字段过滤不是正文自动脱敏，不能公开上传或提交。进度回调按完成阶段通知，共六步；最后的 6/6 在成功登记后发出，不代表各阶段耗时相等。后台 Trace 可视化尚未实现。
 
 ### C5–C15：清理、编码、存储与完整摄取
 
@@ -50,7 +70,7 @@ uv pip install --python .venv/bin/python -e '.[dev,providers,splitters,vector-st
 
 Chroma 保存正文、向量及元数据；BM25 保存词项倒排索引，并用最终 Chroma ID 关联原文；SQLite 图片表只登记 Loader 已保存的文件路径。完整流程的 BM25 文件位于 `data/db/bm25/{collection}/{collection}_bm25.json`。
 
-已知限制：内容哈希跳过仍不区分集合/配置；文档更新替换旧 BM25 块，但不自动删除旧 Chroma 向量或图片记录；多存储没有跨库事务，中途失败允许重试而不保证回滚。字符切分和规则清理不保证 Markdown 结构保真，精确偏移及完整 Trace 后续实现。不能把临时离线链路通过等同于真实语料的检索/回答质量通过。
+已知限制：内容哈希跳过仍不区分集合/配置；文档更新替换旧 BM25 块，但不自动删除旧 Chroma 向量或图片记录；多存储没有跨库事务，中途失败允许重试而不保证回滚。字符切分和规则清理不保证 Markdown 结构保真，精确偏移及文档生命周期管理留后续阶段。不能把临时离线链路通过等同于真实语料的检索/回答质量通过。
 
 ### C1–C3：对象、文件记录与文档解析
 
